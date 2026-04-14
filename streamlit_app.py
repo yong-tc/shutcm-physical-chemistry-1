@@ -22,12 +22,12 @@ def calc_composition(refractive_index):
 def find_azeotrope(df, poly_deg=5):
     """
     从数据中找出最低恒沸点（温度最低点）
-    df: 包含 'x' (液相组成) 和 'boiling_point' 的 DataFrame
+    df: 包含 'x' (液相组成) 和 '沸点(℃)' 的 DataFrame
     返回: (azeo_composition, azeo_temperature)
     """
     # 使用多项式拟合液相线
     x_vals = df['x'].values
-    y_vals = df['boiling_point'].values
+    y_vals = df['沸点(℃)'].values   # 修正列名
     # 按组成排序
     sort_idx = np.argsort(x_vals)
     x_sorted = x_vals[sort_idx]
