@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.interpolate import UnivariateSpline
-from scipy.optimize import curve_fit
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="乙醇-环己烷沸点组成图绘制", layout="wide")
@@ -23,6 +22,8 @@ if 'azeo_T' not in st.session_state:
     st.session_state.azeo_T = None
 if 'fig_html' not in st.session_state:
     st.session_state.fig_html = None
+if 'poly_coeffs' not in st.session_state:
+    st.session_state.poly_coeffs = None
 
 # ==================== 辅助函数 ====================
 def fit_calibration_curve(x_data, y_data, degree=3):
@@ -92,7 +93,6 @@ calibration_data = {
 }
 calibration_df_default = pd.DataFrame(calibration_data)
 
-# 数据输入方式选择
 cal_data_source = st.radio("标准曲线数据来源", ["使用示例数据", "手动编辑表格", "上传 CSV 文件"], key="cal")
 if cal_data_source == "使用示例数据":
     calibration_df = calibration_df_default.copy()
@@ -118,7 +118,8 @@ poly, coeffs = fit_calibration_curve(x_cal, y_cal, degree=fit_degree)
 
 # 显示拟合公式
 coeff_str = " + ".join([f"{coeff:.6f}·x^{len(coeffs)-1-i}" for i, coeff in enumerate(coeffs)])
-st.info(f"拟合公式: **n = {coeff_str.replace('x^1', 'x').replace('x^0', '')}**")
+coeff_str = coeff_str.replace("·x^1", "·x").replace("·x^0", "")
+st.info(f"拟合公式: **n = {coeff_str}**")
 
 # 绘制标准曲线
 x_cal_fine = np.linspace(0, 1, 200)
@@ -148,7 +149,6 @@ st.subheader("📊 第二步：沸点及气液相组成测定")
 
 st.markdown("**表2-6 乙醇-环己烷系统的沸点及气、液相组成测定**")
 
-# 示例数据（来源于教材典型数据）
 boiling_data = {
     "组别": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     "乙醇:环己烷": ["99.4:0.6", "98:2", "92:8", "86.8:13.2", "70:30", "42.5:57.5", "35:65", "17:83", "6:94", "0.2:99.8"],
@@ -165,7 +165,7 @@ if boil_data_source == "使用示例数据":
 elif boil_data_source == "手动编辑表格":
     boiling_df = st.data_editor(boiling_df_default, num_rows="dynamic", use_container_width=True)
 else:
-    boil_uploaded = st.file_uploader("上传 CSV (列名: 沸点, 液相折光率, 气相折光率)", type="csv")
+    boil_uploaded = st.file_uploader("上传 CSV (列名: 沸点(℃), 液相折光率, 气相折光率)", type="csv")
     if boil_uploaded:
         boiling_df = pd.read_csv(boil_uploaded)
         st.dataframe(boiling_df, use_container_width=True)
@@ -212,7 +212,7 @@ if st.button("🚀 开始计算并绘制相图", type="primary"):
     st.rerun()
 
 # ==================== 显示计算结果（如果已计算）====================
-if st.session_state.calculated:
+if st.session_state.calculated and st.session_state.result_df is not None:
     result_df = st.session_state.result_df
     azeo_x = st.session_state.azeo_x
     azeo_T = st.session_state.azeo_T
@@ -240,18 +240,19 @@ if st.session_state.calculated:
     fig = go.Figure()
     
     # 液相线（平滑曲线）
-    fig.add_trace(go.Scatter(
-        x=x_smooth_liq, y=T_smooth_liq,
-        mode='lines', name='液相线',
-        line=dict(color='blue', width=3)
-    ))
-    
+    if len(x_smooth_liq) > 0:
+        fig.add_trace(go.Scatter(
+            x=x_smooth_liq, y=T_smooth_liq,
+            mode='lines', name='液相线',
+            line=dict(color='blue', width=3)
+        ))
     # 气相线（平滑曲线）
-    fig.add_trace(go.Scatter(
-        x=x_smooth_vap, y=T_smooth_vap,
-        mode='lines', name='气相线',
-        line=dict(color='red', width=3, dash='dash')
-    ))
+    if len(x_smooth_vap) > 0:
+        fig.add_trace(go.Scatter(
+            x=x_smooth_vap, y=T_smooth_vap,
+            mode='lines', name='气相线',
+            line=dict(color='red', width=3, dash='dash')
+        ))
     
     # 液相实验点
     fig.add_trace(go.Scatter(
@@ -292,26 +293,27 @@ if st.session_state.calculated:
     
     # 折光率-组成标准曲线再次显示
     st.subheader("📈 折光率-组成标准曲线")
-    fig_cal = go.Figure()
-    fig_cal.add_trace(go.Scatter(
-        x=st.session_state.calibration_df["环己烷质量分数"], 
-        y=st.session_state.calibration_df["折光率 (25℃)"],
-        mode='markers', name='实验数据点',
-        marker=dict(color='blue', size=8)
-    ))
-    x_cal_fine = np.linspace(0, 1, 200)
-    y_cal_fine = np.poly1d(st.session_state.poly_coeffs)(x_cal_fine)
-    fig_cal.add_trace(go.Scatter(
-        x=x_cal_fine, y=y_cal_fine,
-        mode='lines', name='拟合曲线',
-        line=dict(color='red', width=2)
-    ))
-    fig_cal.update_layout(
-        xaxis_title="环己烷质量分数",
-        yaxis_title="折光率 (25℃)",
-        height=400
-    )
-    st.plotly_chart(fig_cal, use_container_width=True)
+    if st.session_state.poly_coeffs is not None:
+        poly_rev = np.poly1d(st.session_state.poly_coeffs)
+        y_cal_fine_rev = poly_rev(x_cal_fine)
+        fig_cal2 = go.Figure()
+        fig_cal2.add_trace(go.Scatter(
+            x=st.session_state.calibration_df["环己烷质量分数"],
+            y=st.session_state.calibration_df["折光率 (25℃)"],
+            mode='markers', name='实验数据点',
+            marker=dict(color='blue', size=8)
+        ))
+        fig_cal2.add_trace(go.Scatter(
+            x=x_cal_fine, y=y_cal_fine_rev,
+            mode='lines', name='拟合曲线',
+            line=dict(color='red', width=2)
+        ))
+        fig_cal2.update_layout(
+            xaxis_title="环己烷质量分数",
+            yaxis_title="折光率 (25℃)",
+            height=400
+        )
+        st.plotly_chart(fig_cal2, use_container_width=True)
     
     # ==================== 导出与打印 ====================
     st.subheader("💾 导出与打印")
@@ -322,6 +324,37 @@ if st.session_state.calculated:
     with col2:
         # 生成完整实验报告 HTML
         if st.button("🖨️ 生成 PDF 报告"):
+            # 准备公式字符串
+            if st.session_state.poly_coeffs is not None:
+                coeffs_list = st.session_state.poly_coeffs
+                coeff_str_report = " + ".join([f"{coeff:.6f}·x^{len(coeffs_list)-1-i}" for i, coeff in enumerate(coeffs_list)])
+                coeff_str_report = coeff_str_report.replace("·x^1", "·x").replace("·x^0", "")
+            else:
+                coeff_str_report = "未拟合"
+            
+            # 重新生成标准曲线图（避免引用问题）
+            fig_cal_report = go.Figure()
+            fig_cal_report.add_trace(go.Scatter(
+                x=st.session_state.calibration_df["环己烷质量分数"],
+                y=st.session_state.calibration_df["折光率 (25℃)"],
+                mode='markers', name='实验数据点',
+                marker=dict(color='blue', size=8)
+            ))
+            x_cal_fine_report = np.linspace(0, 1, 200)
+            if st.session_state.poly_coeffs is not None:
+                poly_report = np.poly1d(st.session_state.poly_coeffs)
+                y_cal_fine_report = poly_report(x_cal_fine_report)
+                fig_cal_report.add_trace(go.Scatter(
+                    x=x_cal_fine_report, y=y_cal_fine_report,
+                    mode='lines', name='拟合曲线',
+                    line=dict(color='red', width=2)
+                ))
+            fig_cal_report.update_layout(
+                xaxis_title="环己烷质量分数",
+                yaxis_title="折光率 (25℃)",
+                height=400
+            )
+            
             report_html = f"""
             <html>
             <head>
@@ -344,8 +377,8 @@ if st.session_state.calculated:
                 <p><strong>生成时间：</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
                 
                 <h2>1. 折光率-组成标准曲线</h2>
-                <p>拟合公式: n = {coeff_str.replace('x^', 'x<sup>').replace(' ', '')}</p>
-                <div class="chart">{fig_cal.to_html(full_html=False, include_plotlyjs='cdn')}</div>
+                <p>拟合公式: n = {coeff_str_report}</p>
+                <div class="chart">{fig_cal_report.to_html(full_html=False, include_plotlyjs='cdn')}</div>
                 
                 <h2>2. 沸点及气液相组成测定数据</h2>
                 {result_df.to_html(index=False)}
@@ -366,13 +399,21 @@ if st.session_state.calculated:
             st.success("报告已生成，请在弹出的打印对话框中选择「另存为 PDF」")
     with col3:
         # 显示组成计算公式
-        with st.expander("🔍 查看组成计算公式"):
-            st.markdown(f"""
-            **折光率 n → 环己烷质量分数 x 的计算公式：**
-            x = {coeffs[0]:.6f}·n^{len(coeffs)-1} {'+' if coeffs[1]>=0 else '-'} {abs(coeffs[1]):.6f}·n^{len(coeffs)-2} {'+' if coeffs[2]>=0 else '-'} {abs(coeffs[2]):.6f}·n^{len(coeffs)-3} ...
-            
-**使用方法：** 将实验测得的液相或气相折光率 n 代入上述多项式，即可计算对应的环己烷质量分数组成。
-""")
+        if st.session_state.poly_coeffs is not None:
+            with st.expander("🔍 查看组成计算公式"):
+                coeffs_disp = st.session_state.poly_coeffs
+                formula = "x = "
+                for i, coeff in enumerate(coeffs_disp):
+                    power = len(coeffs_disp)-1-i
+                    if power == 0:
+                        formula += f"{coeff:.6f}"
+                    elif power == 1:
+                        formula += f"{coeff:.6f}·n + "
+                    else:
+                        formula += f"{coeff:.6f}·n^{power} + "
+                st.markdown(f"**由折光率 n 计算环己烷质量分数 x 的公式：**\n\n`{formula}`")
+        else:
+            st.info("请先点击「开始计算并绘制相图」生成拟合公式。")
 
 st.markdown("---")
 st.caption("📚 数据处理依据：《物理化学实验 新世纪第四版》实验四 · 具有最低恒沸点二元系统的沸点组成图绘制")
