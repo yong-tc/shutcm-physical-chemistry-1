@@ -4,416 +4,180 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.interpolate import UnivariateSpline
 
-# ==================== 页面配置 ====================
-st.set_page_config(page_title="乙醇-环己烷沸点组成图绘制", layout="wide")
-st.title("🧪 具有最低恒沸点二元系统的沸点组成图绘制")
-st.markdown("**参考教材：** 《物理化学实验 新世纪第四版》实验四 · 乙醇-环己烷体系")
+st.set_page_config(page_title="二组分相图绘制", layout="wide")
+st.title("🧪 二组分体系沸点-组成相图（乙醇-环己烷）")
 
-# ==================== 初始化 session_state ====================
+# 初始化 session_state
 if 'calculated' not in st.session_state:
     st.session_state.calculated = False
-if 'result_df' not in st.session_state:
-    st.session_state.result_df = None
-if 'calibration_df' not in st.session_state:
-    st.session_state.calibration_df = None
-if 'azeo_x' not in st.session_state:
-    st.session_state.azeo_x = None
-if 'azeo_T' not in st.session_state:
-    st.session_state.azeo_T = None
-if 'fig_html' not in st.session_state:
-    st.session_state.fig_html = None
-if 'poly_coeffs' not in st.session_state:
-    st.session_state.poly_coeffs = None
 
-# ==================== 辅助函数 ====================
-def fit_calibration_curve(x_data, y_data, degree=3):
-    """多项式拟合折光率-组成标准曲线"""
-    coeffs = np.polyfit(x_data, y_data, degree)
-    poly = np.poly1d(coeffs)
-    return poly, coeffs
-
-def smooth_curve(x, y, smoothing=0.05, num_points=500):
-    """样条插值生成平滑曲线"""
-    mask = ~(np.isnan(x) | np.isnan(y))
-    x_clean = np.array(x)[mask]
-    y_clean = np.array(y)[mask]
-    if len(x_clean) < 3:
-        return x_clean, y_clean
-    sort_idx = np.argsort(x_clean)
-    x_sorted = x_clean[sort_idx]
-    y_sorted = y_clean[sort_idx]
-    spl = UnivariateSpline(x_sorted, y_sorted, s=smoothing)
-    x_smooth = np.linspace(x_sorted.min(), x_sorted.max(), num_points)
-    y_smooth = spl(x_smooth)
-    return x_smooth, y_smooth
-
-def find_azeotrope(x_smooth, y_smooth):
-    """从平滑曲线中找最低点"""
-    min_idx = np.argmin(y_smooth)
-    return x_smooth[min_idx], y_smooth[min_idx]
-
-# ==================== 侧边栏：实验说明 ====================
+# 侧边栏说明
 with st.sidebar:
-    st.header("📖 实验说明")
-    with st.expander("实验原理", expanded=True):
-        st.markdown("""
-        乙醇-环己烷二元系统对拉乌尔定律有较大正偏差，其沸点-组成曲线图上出现最低恒沸点。
-        
-        **柯诺瓦洛夫第二定律：** 二元系统处于恒沸点时，其气相组成与液相组成相同。
-        
-        本实验通过测定不同组成溶液的气相和液相折光率，从折光率-组成标准曲线上找出相应的组成，绘制沸点-组成曲线图，确定最低恒沸点。
-        """)
-    with st.expander("实验步骤", expanded=False):
-        st.markdown("""
-        1. 配制10个乙醇-环己烷标准溶液（纯乙醇、纯环己烷及8个不同比例）
-        2. 用阿贝折光仪测定25℃时各标准溶液的折光率
-        3. 在蒸馏瓶中加入标准溶液，加热至沸腾
-        4. 温度恒定后记录沸点温度
-        5. 分别取气相冷凝液和液相混合液测定折光率（各测三次取平均值）
-        6. 按上述步骤测定各组混合液
-        """)
-    with st.expander("数据处理方法", expanded=False):
-        st.markdown("""
-        1. 绘制折光率-组成标准曲线
-        2. 从标准曲线中查找各次蒸馏中气相与液相的组成
-        3. 绘制乙醇-环己烷沸点-组成图
-        4. 找出最低恒沸点的温度及组成
-        """)
+    st.markdown("### 使用说明")
+    st.markdown("1. 输入标准曲线数据（折光率 vs 环己烷质量分数）")
+    st.markdown("2. 输入沸点实验数据（沸点、液相折光率、气相折光率）")
+    st.markdown("3. 点击「开始计算」生成相图")
+    st.markdown("4. 可下载 CSV 或生成 PDF 报告")
 
-# ==================== Tab 1: 标准曲线（折光率-组成） ====================
-st.subheader("📊 第一步：折光率-组成标准曲线")
+# ========== 标准曲线数据 ==========
+st.subheader("📈 标准曲线（折光率 → 组成）")
+st.markdown("请提供环己烷质量分数与折光率的关系（至少3个点）")
 
-st.markdown("**表2-5 乙醇-环己烷标准曲线测定**")
-
-calibration_data = {
-    "样品编号": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    "乙醇:环己烷": ["99.4:0.6", "98:2", "92:8", "86.8:13.2", "70:30", "42.5:57.5", "35:65", "17:83", "6:94", "0.2:99.8"],
+cal_default = pd.DataFrame({
     "环己烷质量分数": [0.006, 0.02, 0.08, 0.132, 0.30, 0.575, 0.65, 0.83, 0.94, 0.998],
-    "折光率 (25℃)": [1.4229, 1.4220, 1.4184, 1.4155, 1.3990, 1.3791, 1.3685, 1.3641, 1.3608, 1.3586]
-}
-calibration_df_default = pd.DataFrame(calibration_data)
+    "折光率": [1.4229, 1.4220, 1.4184, 1.4155, 1.3990, 1.3791, 1.3685, 1.3641, 1.3608, 1.3586]
+})
+cal_df = st.data_editor(cal_default, num_rows="dynamic", use_container_width=True)
 
-cal_data_source = st.radio("标准曲线数据来源", ["使用示例数据", "手动编辑表格", "上传 CSV 文件"], key="cal")
-if cal_data_source == "使用示例数据":
-    calibration_df = calibration_df_default.copy()
-    st.dataframe(calibration_df, use_container_width=True)
-elif cal_data_source == "手动编辑表格":
-    calibration_df = st.data_editor(calibration_df_default, num_rows="dynamic", use_container_width=True)
-else:
-    cal_uploaded = st.file_uploader("上传 CSV (列名: 环己烷质量分数, 折光率)", type="csv")
-    if cal_uploaded:
-        calibration_df = pd.read_csv(cal_uploaded)
-        st.dataframe(calibration_df, use_container_width=True)
-    else:
-        st.stop()
+if len(cal_df) < 3:
+    st.warning("标准曲线至少需要3个数据点")
+    st.stop()
 
-# 多项式拟合标准曲线
-st.markdown("**折光率-组成标准曲线拟合**")
-fit_degree = st.slider("拟合多项式次数", min_value=1, max_value=5, value=3, key="fit_deg")
-
-# 拟合
-x_cal = calibration_df["环己烷质量分数"].values
-y_cal = calibration_df["折光率 (25℃)"].values
-poly, coeffs = fit_calibration_curve(x_cal, y_cal, degree=fit_degree)
-
-# 显示拟合公式
-coeff_str = " + ".join([f"{coeff:.6f}·x^{len(coeffs)-1-i}" for i, coeff in enumerate(coeffs)])
-coeff_str = coeff_str.replace("·x^1", "·x").replace("·x^0", "")
-st.info(f"拟合公式: **n = {coeff_str}**")
+# 多项式拟合（次数可选）
+degree = st.slider("拟合多项式次数", 1, 5, 3)
+coeffs = np.polyfit(cal_df["环己烷质量分数"], cal_df["折光率"], degree)
+poly = np.poly1d(coeffs)
 
 # 绘制标准曲线
-x_cal_fine = np.linspace(0, 1, 200)
-y_cal_fine = poly(x_cal_fine)
-
+x_cal = np.linspace(0, 1, 200)
+y_cal = poly(x_cal)
 fig_cal = go.Figure()
-fig_cal.add_trace(go.Scatter(
-    x=calibration_df["环己烷质量分数"], y=calibration_df["折光率 (25℃)"],
-    mode='markers', name='实验数据点',
-    marker=dict(color='blue', size=8, symbol='circle')
-))
-fig_cal.add_trace(go.Scatter(
-    x=x_cal_fine, y=y_cal_fine,
-    mode='lines', name=f'拟合曲线 (次数={fit_degree})',
-    line=dict(color='red', width=2)
-))
-fig_cal.update_layout(
-    xaxis_title="环己烷质量分数",
-    yaxis_title="折光率 (25℃)",
-    legend=dict(x=0.05, y=0.95),
-    height=400
-)
+fig_cal.add_trace(go.Scatter(x=cal_df["环己烷质量分数"], y=cal_df["折光率"], mode='markers', name='实验点'))
+fig_cal.add_trace(go.Scatter(x=x_cal, y=y_cal, mode='lines', name=f'拟合曲线 (次数={degree})'))
+fig_cal.update_layout(xaxis_title="环己烷质量分数", yaxis_title="折光率", height=350)
 st.plotly_chart(fig_cal, use_container_width=True)
 
-# ==================== Tab 2: 沸点与组成数据 ====================
-st.subheader("📊 第二步：沸点及气液相组成测定")
+# ========== 沸点实验数据 ==========
+st.subheader("🔥 沸点及折光率数据")
+st.markdown("输入各混合溶液的沸点、液相折光率、气相折光率")
 
-st.markdown("**表2-6 乙醇-环己烷系统的沸点及气、液相组成测定**")
-
-boiling_data = {
-    "组别": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    "乙醇:环己烷": ["99.4:0.6", "98:2", "92:8", "86.8:13.2", "70:30", "42.5:57.5", "35:65", "17:83", "6:94", "0.2:99.8"],
+boil_default = pd.DataFrame({
     "沸点(℃)": [80.6, 73.3, 66.4, 65.5, 65.1, 65.5, 66.4, 70.2, 74.5, 78.2],
     "液相折光率": [1.4229, 1.4220, 1.4184, 1.4155, 1.3990, 1.3791, 1.3685, 1.3641, 1.3608, 1.3586],
     "气相折光率": [1.4227, 1.4058, 1.4012, 1.4002, 1.3991, 1.3968, 1.3933, 1.3851, 1.3732, 1.3587]
-}
-boiling_df_default = pd.DataFrame(boiling_data)
+})
+boil_df = st.data_editor(boil_default, num_rows="dynamic", use_container_width=True)
 
-boil_data_source = st.radio("沸点组成数据来源", ["使用示例数据", "手动编辑表格", "上传 CSV 文件"], key="boil")
-if boil_data_source == "使用示例数据":
-    boiling_df = boiling_df_default.copy()
-    st.dataframe(boiling_df, use_container_width=True)
-elif boil_data_source == "手动编辑表格":
-    boiling_df = st.data_editor(boiling_df_default, num_rows="dynamic", use_container_width=True)
-else:
-    boil_uploaded = st.file_uploader("上传 CSV (列名: 沸点(℃), 液相折光率, 气相折光率)", type="csv")
-    if boil_uploaded:
-        boiling_df = pd.read_csv(boil_uploaded)
-        st.dataframe(boiling_df, use_container_width=True)
-    else:
-        st.stop()
+if boil_df.empty:
+    st.warning("请至少输入一组数据")
+    st.stop()
 
-# ==================== 计算按钮 ====================
-if st.button("🚀 开始计算并绘制相图", type="primary"):
-    # 使用标准曲线拟合多项式计算液相和气相组成
-    boiling_df['液相组成_x'] = poly(boiling_df["液相折光率"].values)
-    boiling_df['气相组成_y'] = poly(boiling_df["气相折光率"].values)
+# ========== 计算按钮 ==========
+if st.button("🚀 开始计算", type="primary"):
+    # 根据标准曲线计算组成（注意：poly 给出的是折光率→组成？不，我们拟合的是 组成→折光率，需要反函数？实际上应该用组成→折光率，然后由折光率反推组成。为了简单，我们直接拟合 折光率→组成（交换 x,y）或者用插值。这里改用拟合 折光率→组成）
+    # 重新拟合：组成作为因变量，折光率作为自变量
+    coeffs_inv = np.polyfit(cal_df["折光率"], cal_df["环己烷质量分数"], degree)
+    poly_inv = np.poly1d(coeffs_inv)
     
-    # 确保组成在有效范围内
-    boiling_df['液相组成_x'] = boiling_df['液相组成_x'].clip(0, 1)
-    boiling_df['气相组成_y'] = boiling_df['气相组成_y'].clip(0, 1)
+    boil_df['液相组成'] = poly_inv(boil_df["液相折光率"]).clip(0,1)
+    boil_df['气相组成'] = poly_inv(boil_df["气相折光率"]).clip(0,1)
     
-    # 生成平滑曲线
-    x_smooth_liq, T_smooth_liq = smooth_curve(boiling_df['液相组成_x'], boiling_df['沸点(℃)'], smoothing=0.05)
-    x_smooth_vap, T_smooth_vap = smooth_curve(boiling_df['气相组成_y'], boiling_df['沸点(℃)'], smoothing=0.05)
+    # 平滑曲线
+    def smooth(x, y, s=0.05):
+        mask = ~(np.isnan(x) | np.isnan(y))
+        xc, yc = np.array(x)[mask], np.array(y)[mask]
+        if len(xc) < 3:
+            return xc, yc
+        idx = np.argsort(xc)
+        xc, yc = xc[idx], yc[idx]
+        spl = UnivariateSpline(xc, yc, s=s)
+        xs = np.linspace(xc.min(), xc.max(), 300)
+        ys = spl(xs)
+        return xs, ys
     
-    # 寻找最低恒沸点
-    if len(x_smooth_liq) > 0:
-        azeo_x, azeo_T = find_azeotrope(x_smooth_liq, T_smooth_liq)
+    xs_liq, Ts_liq = smooth(boil_df["液相组成"], boil_df["沸点(℃)"], s=0.05)
+    xs_vap, Ts_vap = smooth(boil_df["气相组成"], boil_df["沸点(℃)"], s=0.05)
+    
+    # 找最低恒沸点（从液相线找最低温度点）
+    if len(xs_liq) > 0:
+        min_idx = np.argmin(Ts_liq)
+        azeo_x = xs_liq[min_idx]
+        azeo_T = Ts_liq[min_idx]
     else:
         azeo_x, azeo_T = None, None
     
-    # 准备结果表格（教材表2-6格式）
-    result_df = boiling_df[['组别', '乙醇:环己烷', '沸点(℃)', '液相折光率', '气相折光率', '液相组成_x', '气相组成_y']].copy()
-    result_df.columns = ['组别', '配比', '沸点(℃)', '液相折光率', '气相折光率', '液相组成 x (环己烷)', '气相组成 y (环己烷)']
-    
-    # 存储到 session_state
+    # 保存到 session_state
     st.session_state.calculated = True
-    st.session_state.result_df = result_df
-    st.session_state.calibration_df = calibration_df
+    st.session_state.boil_df = boil_df
+    st.session_state.xs_liq = xs_liq
+    st.session_state.Ts_liq = Ts_liq
+    st.session_state.xs_vap = xs_vap
+    st.session_state.Ts_vap = Ts_vap
     st.session_state.azeo_x = azeo_x
     st.session_state.azeo_T = azeo_T
-    st.session_state.x_smooth_liq = x_smooth_liq
-    st.session_state.T_smooth_liq = T_smooth_liq
-    st.session_state.x_smooth_vap = x_smooth_vap
-    st.session_state.T_smooth_vap = T_smooth_vap
-    st.session_state.poly_coeffs = coeffs
-    
-    st.success("计算完成！")
+    st.session_state.poly_inv_coeffs = coeffs_inv
     st.rerun()
 
-# ==================== 显示计算结果（如果已计算）====================
-if st.session_state.calculated and st.session_state.result_df is not None:
-    result_df = st.session_state.result_df
+# ========== 显示结果 ==========
+if st.session_state.calculated:
+    boil_df = st.session_state.boil_df
+    xs_liq = st.session_state.xs_liq
+    Ts_liq = st.session_state.Ts_liq
+    xs_vap = st.session_state.xs_vap
+    Ts_vap = st.session_state.Ts_vap
     azeo_x = st.session_state.azeo_x
     azeo_T = st.session_state.azeo_T
-    x_smooth_liq = st.session_state.x_smooth_liq
-    T_smooth_liq = st.session_state.T_smooth_liq
-    x_smooth_vap = st.session_state.x_smooth_vap
-    T_smooth_vap = st.session_state.T_smooth_vap
     
-    # 显示计算结果表格
     st.subheader("📊 计算结果")
-    st.markdown("**表2-6 乙醇-环己烷系统的沸点及气、液相组成测定（含计算组成）**")
-    st.dataframe(result_df, use_container_width=True)
+    result_show = boil_df[['沸点(℃)', '液相折光率', '气相折光率', '液相组成', '气相组成']].copy()
+    result_show.columns = ['沸点(℃)', '液相折光率', '气相折光率', '液相组成(x)', '气相组成(y)']
+    st.dataframe(result_show, use_container_width=True)
     
-    # 统计信息
-    st.subheader("📈 最低恒沸点")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("最低恒沸点温度", f"{azeo_T:.2f} ℃" if azeo_T else "无法计算")
-    with col2:
-        st.metric("恒沸点组成 (环己烷质量分数)", f"{azeo_x:.4f}" if azeo_x else "无法计算")
-    
-    # 绘制沸点-组成相图
-    st.subheader("📈 乙醇-环己烷体系沸点-组成图")
-    
-    fig = go.Figure()
-    
-    # 液相线（平滑曲线）
-    if len(x_smooth_liq) > 0:
-        fig.add_trace(go.Scatter(
-            x=x_smooth_liq, y=T_smooth_liq,
-            mode='lines', name='液相线',
-            line=dict(color='blue', width=3)
-        ))
-    # 气相线（平滑曲线）
-    if len(x_smooth_vap) > 0:
-        fig.add_trace(go.Scatter(
-            x=x_smooth_vap, y=T_smooth_vap,
-            mode='lines', name='气相线',
-            line=dict(color='red', width=3, dash='dash')
-        ))
-    
-    # 液相实验点
-    fig.add_trace(go.Scatter(
-        x=result_df['液相组成 x (环己烷)'], y=result_df['沸点(℃)'],
-        mode='markers', name='液相实验点',
-        marker=dict(color='blue', size=8, symbol='circle')
-    ))
-    
-    # 气相实验点
-    fig.add_trace(go.Scatter(
-        x=result_df['气相组成 y (环己烷)'], y=result_df['沸点(℃)'],
-        mode='markers', name='气相实验点',
-        marker=dict(color='red', size=8, symbol='square')
-    ))
-    
-    # 恒沸点标记
     if azeo_x is not None:
-        fig.add_trace(go.Scatter(
-            x=[azeo_x], y=[azeo_T],
-            mode='markers', name=f'最低恒沸点 ({azeo_x:.3f}, {azeo_T:.1f}℃)',
-            marker=dict(color='green', size=14, symbol='star')
-        ))
-        # 添加恒沸点垂线
-        fig.add_vline(x=azeo_x, line_dash="dot", line_color="gray", opacity=0.5)
-        fig.add_hline(y=azeo_T, line_dash="dot", line_color="gray", opacity=0.5)
+        st.success(f"**最低恒沸点**：环己烷质量分数 = {azeo_x:.4f}，沸点 = {azeo_T:.2f} ℃")
+    else:
+        st.warning("无法确定恒沸点（数据点不足）")
     
-    fig.update_layout(
-        xaxis_title="环己烷质量分数",
-        yaxis_title="沸点 (℃)",
-        legend=dict(x=0.05, y=0.95),
-        height=500,
-        xaxis_range=[0, 1]
-    )
+    # 绘制相图
+    fig = go.Figure()
+    if len(xs_liq) > 0:
+        fig.add_trace(go.Scatter(x=xs_liq, y=Ts_liq, mode='lines', name='液相线', line=dict(color='blue', width=3)))
+    if len(xs_vap) > 0:
+        fig.add_trace(go.Scatter(x=xs_vap, y=Ts_vap, mode='lines', name='气相线', line=dict(color='red', width=3, dash='dash')))
+    fig.add_trace(go.Scatter(x=boil_df["液相组成"], y=boil_df["沸点(℃)"], mode='markers', name='液相实验点', marker=dict(color='blue', size=8)))
+    fig.add_trace(go.Scatter(x=boil_df["气相组成"], y=boil_df["沸点(℃)"], mode='markers', name='气相实验点', marker=dict(color='red', size=8)))
+    if azeo_x is not None:
+        fig.add_trace(go.Scatter(x=[azeo_x], y=[azeo_T], mode='markers', name='最低恒沸点', marker=dict(color='green', size=12, symbol='star')))
+    fig.update_layout(xaxis_title="环己烷质量分数", yaxis_title="沸点(℃)", height=500, xaxis_range=[0,1])
     st.plotly_chart(fig, use_container_width=True)
     
-    # 保存图表 HTML 供打印
-    st.session_state.fig_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
-    
-    # 折光率-组成标准曲线再次显示
-    st.subheader("📈 折光率-组成标准曲线")
-    if st.session_state.poly_coeffs is not None:
-        poly_rev = np.poly1d(st.session_state.poly_coeffs)
-        y_cal_fine_rev = poly_rev(x_cal_fine)
-        fig_cal2 = go.Figure()
-        fig_cal2.add_trace(go.Scatter(
-            x=st.session_state.calibration_df["环己烷质量分数"],
-            y=st.session_state.calibration_df["折光率 (25℃)"],
-            mode='markers', name='实验数据点',
-            marker=dict(color='blue', size=8)
-        ))
-        fig_cal2.add_trace(go.Scatter(
-            x=x_cal_fine, y=y_cal_fine_rev,
-            mode='lines', name='拟合曲线',
-            line=dict(color='red', width=2)
-        ))
-        fig_cal2.update_layout(
-            xaxis_title="环己烷质量分数",
-            yaxis_title="折光率 (25℃)",
-            height=400
-        )
-        st.plotly_chart(fig_cal2, use_container_width=True)
-    
-    # ==================== 导出与打印 ====================
+    # 导出与打印
     st.subheader("💾 导出与打印")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        csv_data = result_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 下载数据 CSV", csv_data, "phase_diagram_data.csv", "text/csv")
+        csv = result_show.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 下载数据 CSV", csv, "phase_diagram.csv", "text/csv")
     with col2:
-        # 生成完整实验报告 HTML
         if st.button("🖨️ 生成 PDF 报告"):
-            # 准备公式字符串
-            if st.session_state.poly_coeffs is not None:
-                coeffs_list = st.session_state.poly_coeffs
-                coeff_str_report = " + ".join([f"{coeff:.6f}·x^{len(coeffs_list)-1-i}" for i, coeff in enumerate(coeffs_list)])
-                coeff_str_report = coeff_str_report.replace("·x^1", "·x").replace("·x^0", "")
-            else:
-                coeff_str_report = "未拟合"
-            
-            # 重新生成标准曲线图（避免引用问题）
-            fig_cal_report = go.Figure()
-            fig_cal_report.add_trace(go.Scatter(
-                x=st.session_state.calibration_df["环己烷质量分数"],
-                y=st.session_state.calibration_df["折光率 (25℃)"],
-                mode='markers', name='实验数据点',
-                marker=dict(color='blue', size=8)
-            ))
-            x_cal_fine_report = np.linspace(0, 1, 200)
-            if st.session_state.poly_coeffs is not None:
-                poly_report = np.poly1d(st.session_state.poly_coeffs)
-                y_cal_fine_report = poly_report(x_cal_fine_report)
-                fig_cal_report.add_trace(go.Scatter(
-                    x=x_cal_fine_report, y=y_cal_fine_report,
-                    mode='lines', name='拟合曲线',
-                    line=dict(color='red', width=2)
-                ))
-            fig_cal_report.update_layout(
-                xaxis_title="环己烷质量分数",
-                yaxis_title="折光率 (25℃)",
-                height=400
-            )
-            
-            report_html = f"""
+            # 生成包含图表的 HTML 并自动打印
+            fig_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+            report = f"""
             <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>乙醇-环己烷沸点组成图实验报告</title>
-                <style>
-                    body {{ font-family: 'SimHei', 'Microsoft YaHei', Arial, sans-serif; margin: 40px; }}
-                    h1 {{ color: #2c3e50; }}
-                    h2 {{ color: #34495e; border-bottom: 1px solid #ddd; }}
-                    table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: center; }}
-                    th {{ background-color: #f2f2f2; }}
-                    .chart {{ margin: 30px 0; page-break-inside: avoid; break-inside: avoid; }}
-                </style>
-                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <head><meta charset="UTF-8"><title>二组分相图实验报告</title>
+            <style>
+                body {{ font-family: 'SimHei', sans-serif; margin: 40px; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: center; }}
+                th {{ background-color: #f2f2f2; }}
+                .chart {{ page-break-inside: avoid; }}
+            </style>
+            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
             </head>
             <body>
-                <h1>乙醇-环己烷二组分体系沸点组成图实验报告</h1>
-                <p><strong>教材：</strong> 物理化学实验 新世纪第四版 实验四</p>
-                <p><strong>生成时间：</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                
-                <h2>1. 折光率-组成标准曲线</h2>
-                <p>拟合公式: n = {coeff_str_report}</p>
-                <div class="chart">{fig_cal_report.to_html(full_html=False, include_plotlyjs='cdn')}</div>
-                
-                <h2>2. 沸点及气液相组成测定数据</h2>
-                {result_df.to_html(index=False)}
-                
-                <h2>3. 最低恒沸点</h2>
+                <h1>二组分体系沸点-组成相图实验报告</h1>
+                <p>生成时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <h2>实验数据</h2>
+                {result_show.to_html(index=False)}
+                <h2>最低恒沸点</h2>
                 <p>环己烷质量分数 = {azeo_x:.4f}，沸点 = {azeo_T:.2f} ℃</p>
-                
-                <h2>4. 乙醇-环己烷体系沸点-组成图</h2>
-                <div class="chart">{st.session_state.fig_html}</div>
-                
-                <script>
-                    window.onload = function() {{ window.print(); }};
-                </script>
+                <h2>沸点-组成相图</h2>
+                <div class="chart">{fig_html}</div>
+                <script>window.onload=()=>window.print();</script>
             </body>
             </html>
             """
-            st.components.v1.html(report_html, height=0, scrolling=False)
-            st.success("报告已生成，请在弹出的打印对话框中选择「另存为 PDF」")
-    with col3:
-        # 显示组成计算公式
-        if st.session_state.poly_coeffs is not None:
-            with st.expander("🔍 查看组成计算公式"):
-                coeffs_disp = st.session_state.poly_coeffs
-                formula = "x = "
-                for i, coeff in enumerate(coeffs_disp):
-                    power = len(coeffs_disp)-1-i
-                    if power == 0:
-                        formula += f"{coeff:.6f}"
-                    elif power == 1:
-                        formula += f"{coeff:.6f}·n + "
-                    else:
-                        formula += f"{coeff:.6f}·n^{power} + "
-                st.markdown(f"**由折光率 n 计算环己烷质量分数 x 的公式：**\n\n`{formula}`")
-        else:
-            st.info("请先点击「开始计算并绘制相图」生成拟合公式。")
+            st.components.v1.html(report, height=0, scrolling=False)
+            st.success("报告已生成，请在打印对话框中选择「另存为 PDF」")
 
 st.markdown("---")
-st.caption("📚 数据处理依据：《物理化学实验 新世纪第四版》实验四 · 具有最低恒沸点二元系统的沸点组成图绘制")
+st.caption("根据折光率-组成标准曲线计算环己烷质量分数，多项式拟合，平滑曲线展示相图。")
